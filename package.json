@@ -1,5 +1,5 @@
 {
-  "name": "horizontal-scroll-loop",
+  "name": "swipe-gallery",
   "version": "0.1.0",
   "private": true,
   "dependencies": {
