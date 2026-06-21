@@ -1,20 +1,16 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import styled from "styled-components";
 
 const showcaseSwipeTransitionSeconds = 0.6;
 const dragStartThreshold = 8;
 const flingVelocityThreshold = 0.45;
 const itemAmount = 5;
-const itemWidth = 320;
+const maximumItemWidth = 320;
 const showcaseItemGap = 12;
 const showcaseContainerGap = 12;
-const itemStep = itemWidth + showcaseItemGap;
+const mobileSidePeek = 24;
 const clamp = (value, minimum, maximum) =>
 	Math.min(Math.max(value, minimum), maximum);
-const listingWidth =
-	itemAmount * itemWidth +
-	(itemAmount - 1) * showcaseItemGap +
-	showcaseContainerGap * 2;
 const initialVideos = [
 	{ name: "Mountain sunrise", image: "/images/mountain.jpg" },
 	{ name: "City at blue hour", image: "/images/city.jpg" },
@@ -23,20 +19,45 @@ const initialVideos = [
 	{ name: "Desert expedition", image: "/images/desert.jpg" },
 ];
 
-function VideoElement({ isSelected, onSelect, value }) {
+const getGalleryLayout = (containerWidth) => {
+	const itemWidth = Math.min(
+		maximumItemWidth,
+		Math.max(1, containerWidth - mobileSidePeek * 2)
+	);
+	const listingWidth =
+		itemAmount * itemWidth +
+		(itemAmount - 1) * showcaseItemGap +
+		showcaseContainerGap * 2;
+
+	return {
+		containerWidth,
+		itemHeight: itemWidth * 0.625,
+		itemStep: itemWidth + showcaseItemGap,
+		itemWidth,
+		listingWidth,
+		loopCopiesPerSide:
+			Math.ceil(containerWidth / (listingWidth * 2)) + 1,
+	};
+};
+
+function VideoElement({ dimensions, isClone = false, isSelected, onSelect, value }) {
 	return (
 		<VideoCard
+			$height={dimensions.itemHeight}
+			$width={dimensions.itemWidth}
+			aria-hidden={isClone}
 			aria-pressed={isSelected}
 			onClick={() => onSelect(value.name)}
 			selected={isSelected}
+			tabIndex={isClone ? -1 : undefined}
 			type="button"
 		>
 			<CardImage
 				alt={value.name}
 				draggable="false"
-				height="200"
+				height={dimensions.itemHeight}
 				src={value.image}
-				width="320"
+				width={dimensions.itemWidth}
 			/>
 		</VideoCard>
 	);
@@ -182,6 +203,10 @@ function HorizontalScroll() {
 	const [deltaX, setDeltaX] = useState(0);
 	const [videoList, setVideoList] = useState(initialVideos);
 	const [selectedVideo, setSelectedVideo] = useState(initialVideos[0].name);
+	const [galleryLayout, setGalleryLayout] = useState(() =>
+		getGalleryLayout(window.innerWidth)
+	);
+	const showcaseRef = useRef(null);
 	const frameId = useRef(null);
 	const transitionTimer = useRef(null);
 	const pendingDirection = useRef(null);
@@ -225,9 +250,11 @@ function HorizontalScroll() {
 
 	const handleSwiping = useCallback(
 		({ deltaX }) => {
-			scheduleDeltaX(clamp(deltaX, -itemStep, itemStep));
+			scheduleDeltaX(
+				clamp(deltaX, -galleryLayout.itemStep, galleryLayout.itemStep)
+			);
 		},
-		[scheduleDeltaX]
+		[galleryLayout.itemStep, scheduleDeltaX]
 	);
 
 	const handleSwipeEnd = useCallback(
@@ -245,7 +272,7 @@ function HorizontalScroll() {
 			}
 
 			const shouldChangeItem =
-				Math.abs(deltaX) >= itemStep * 0.25 ||
+				Math.abs(deltaX) >= galleryLayout.itemStep * 0.25 ||
 				velocityX >= flingVelocityThreshold;
 			const snapDuration = shouldChangeItem
 				? Math.max(0.18, 0.42 - velocityX * 0.18)
@@ -263,7 +290,10 @@ function HorizontalScroll() {
 				return;
 			}
 
-			const nextDeltaX = direction === "left" ? -itemStep : itemStep;
+			const nextDeltaX =
+				direction === "left"
+					? -galleryLayout.itemStep
+					: galleryLayout.itemStep;
 			scheduleDeltaX(nextDeltaX);
 			pendingDirection.current = direction;
 			transitionTimer.current = setTimeout(
@@ -271,13 +301,47 @@ function HorizontalScroll() {
 				snapDuration * 1000
 			);
 		},
-		[commitPendingRotation, scheduleDeltaX]
+		[commitPendingRotation, galleryLayout.itemStep, scheduleDeltaX]
 	);
 
 	useEffect(() => clearPendingTransition, [clearPendingTransition]);
 
+	useLayoutEffect(() => {
+		const updateGalleryLayout = (width) => {
+			const nextLayout = getGalleryLayout(width);
+			setGalleryLayout((currentLayout) =>
+				currentLayout.containerWidth === nextLayout.containerWidth
+					? currentLayout
+					: nextLayout
+			);
+		};
+		const getContainerWidth = () =>
+			showcaseRef.current?.getBoundingClientRect().width || window.innerWidth;
+		const updateFromContainer = () => updateGalleryLayout(getContainerWidth());
+
+		updateFromContainer();
+		if (typeof ResizeObserver === "undefined") {
+			window.addEventListener("resize", updateFromContainer);
+			return () => window.removeEventListener("resize", updateFromContainer);
+		}
+
+		const resizeObserver = new ResizeObserver(([entry]) => {
+			updateGalleryLayout(entry.contentRect.width);
+		});
+		resizeObserver.observe(showcaseRef.current);
+		return () => resizeObserver.disconnect();
+	}, []);
+
+	const loopedVideos = Array.from(
+		{ length: galleryLayout.loopCopiesPerSide * 2 + 1 },
+		(_, copyIndex) => ({
+			copyIndex,
+			videos: videoList,
+		})
+	);
+
 	return (
-		<StyledHomeShowcaseList data-swiping={isSwiping}>
+		<StyledHomeShowcaseList data-swiping={isSwiping} ref={showcaseRef}>
 			<Swipeable
 				onSwipeEnd={handleSwipeEnd}
 				onSwipeStart={handleSwipeStart}
@@ -286,16 +350,24 @@ function HorizontalScroll() {
 				<ShowcaseList
 					deltaX={deltaX}
 					hasTransition={hasTransition}
+					loopOffset={
+						galleryLayout.loopCopiesPerSide * galleryLayout.listingWidth
+					}
+					listingWidth={galleryLayout.listingWidth}
 					transitionDuration={transitionDuration}
 				>
-					{videoList.map((video) => (
-						<VideoElement
-							isSelected={selectedVideo === video.name}
-							key={video.name}
-							onSelect={setSelectedVideo}
-							value={video}
-						/>
-					))}
+					{loopedVideos.flatMap(({ copyIndex, videos }) =>
+						videos.map((video) => (
+							<VideoElement
+								dimensions={galleryLayout}
+								isClone={copyIndex !== galleryLayout.loopCopiesPerSide}
+								isSelected={selectedVideo === video.name}
+								key={`${copyIndex}-${video.name}`}
+								onSelect={setSelectedVideo}
+								value={video}
+							/>
+						))
+					)}
 				</ShowcaseList>
 			</Swipeable>
 		</StyledHomeShowcaseList>
@@ -315,14 +387,22 @@ const StyledSwipeable = styled.div`
 `;
 
 const ShowcaseList = styled.div.attrs(
-	({ deltaX = 0, hasTransition = false, transitionDuration }) => ({
-	style: {
-		transform: `translate3d(calc((100vw - ${listingWidth}px) * 0.5 + ${deltaX}px), 0, 0)`,
+	({
+		deltaX = 0,
+		hasTransition = false,
+		listingWidth,
+		loopOffset,
+		transitionDuration,
+	}) => ({
+		style: {
+			transform: `translate3d(calc(-${loopOffset + listingWidth / 2}px + ${deltaX}px), 0, 0)`,
 		transition: `transform ${hasTransition ? transitionDuration : 0}s cubic-bezier(0.22, 0.61, 0.36, 1)`,
 		width: `${listingWidth}px`,
 	},
 	})
 )`
+	position: relative;
+	left: 50%;
 	display: flex;
 	flex-wrap: nowrap;
 	will-change: transform;
@@ -336,8 +416,9 @@ const ShowcaseList = styled.div.attrs(
 `;
 
 const VideoCard = styled.button`
-	width: 320px;
-	height: 200px;
+	box-sizing: border-box;
+	width: ${({ $width }) => $width}px;
+	height: ${({ $height }) => $height}px;
 	padding: 0;
 	margin: 0 6px;
 	flex: none;
